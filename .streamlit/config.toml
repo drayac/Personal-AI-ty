@@ -1,0 +1,13 @@
+[general]
+email = ""
+
+[server]
+headless = true
+enableCORS = false
+port = $PORT
+
+[theme]
+base = "dark"
+primaryColor = "#2e7d32"
+backgroundColor = "#0f1419"
+secondaryBackgroundColor = "#1b4332"
