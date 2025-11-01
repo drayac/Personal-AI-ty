@@ -49,9 +49,6 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Results folder (user data)
-results/
-
 # System files
 .DS_Store
 .DS_Store?
