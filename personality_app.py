@@ -506,12 +506,12 @@ def analyze_personality_traits(responses):
         # Use keyword analysis only
         final_scores = keyword_scores
     
-    # Get individual scores for later use
-    analytical_score = final_scores['Analytical Thinker']
-    creative_score = final_scores['Creative Innovator']
-    empathetic_score = final_scores['Empathetic Connector']
-    resilient_score = final_scores['Resilient Achiever']
-    balanced_score = final_scores['Balanced Pragmatist']
+    # Get individual scores for later use (convert to integers for list indexing)
+    analytical_score = int(final_scores['Analytical Thinker'])
+    creative_score = int(final_scores['Creative Innovator'])
+    empathetic_score = int(final_scores['Empathetic Connector'])
+    resilient_score = int(final_scores['Resilient Achiever'])
+    balanced_score = int(final_scores['Balanced Pragmatist'])
     
     # Determine primary personality type based on scores
     max_score = max(final_scores.values()) if final_scores.values() else 0
