@@ -169,6 +169,57 @@ PERSONALITY_QUESTIONS = get_daily_questions()
 
 def get_model_response(user_prompt, system_prompt):
     """Generate AI response using Hugging Face Transformers GPT-2 with smart fallbacks"""
+    try:
+        from transformers import GPT2LMHeadModel, GPT2Tokenizer
+        import torch
+        
+        # Load model and tokenizer
+        model_name = "gpt2"
+        tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+        model = GPT2LMHeadModel.from_pretrained(model_name)
+        
+        # Set pad token
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        
+        # Create a prompt that combines system and user input
+        prompt = f"{system_prompt}\n\nUser: {user_prompt}\nAssistant:"
+        
+        # Tokenize and generate
+        inputs = tokenizer.encode(prompt, return_tensors="pt", max_length=512, truncation=True)
+        
+        with torch.no_grad():
+            outputs = model.generate(
+                inputs,
+                max_length=inputs.shape[1] + 100,
+                num_return_sequences=1,
+                temperature=0.7,
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id,
+                no_repeat_ngram_size=2
+            )
+        
+        # Decode response
+        full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        response = full_response[len(prompt):].strip()
+        
+        # Clean up response
+        if not response or len(response.split()) < 3:
+            raise Exception("Generated response too short")
+            
+        # Remove any incomplete sentences
+        sentences = response.split('.')
+        if len(sentences) > 1:
+            response = '. '.join(sentences[:-1]) + '.'
+        
+        return response
+        
+    except Exception as e:
+        # Fallback to curated responses if transformers fails
+        return get_fallback_response(user_prompt, system_prompt)
+
+def get_fallback_response(user_prompt, system_prompt):
+    """Fallback response system when transformers is not available"""
     import random
     
     # High-quality curated responses for reliable output
@@ -217,7 +268,7 @@ def get_model_response(user_prompt, system_prompt):
     elif any(word in prompt_lower for word in ['grow', 'learn', 'improve', 'develop', 'change', 'better']):
         category = 'growth'
     
-    # Return curated response (simplified for deployment)
+    # Return curated response
     return random.choice(response_patterns[category])
 
 def get_ai_response(question, user_response, question_number):
@@ -278,49 +329,220 @@ Be professional, supportive, and encouraging. Provide analysis and insights only
     
     return ai_response
 
-def analyze_personality_traits(responses):
-    """Analyze personality traits based on user responses"""
-    import re
+def analyze_with_ai(responses, sentiment_results):
+    """Use transformers for personality analysis"""
+    try:
+        # Analyze sentiment patterns
+        positive_count = sum(1 for s in sentiment_results if s['label'] == 'POSITIVE')
+        negative_count = len(sentiment_results) - positive_count
+        total_negative_confidence = sum(s['score'] for s in sentiment_results if s['label'] == 'NEGATIVE')
+        
+        # Combine all responses for analysis
+        full_text = ' '.join(responses).lower()
+        
+        # Initialize personality scores
+        ai_scores = {
+            'Analytical Thinker': 0,
+            'Creative Innovator': 0, 
+            'Empathetic Connector': 0,
+            'Resilient Achiever': 0,
+            'Balanced Pragmatist': 0
+        }
+        
+        # Detect concerning patterns based on sentiment analysis
+        high_negative_responses = [s for s in sentiment_results if s['label'] == 'NEGATIVE' and s['score'] > 0.99]
+        
+        # If we have highly negative responses with concerning content, flag it
+        if len(high_negative_responses) >= 2:
+            # Check for specific concerning themes
+            concerning_themes = ['fail', 'failure', 'power', 'powerful', 'weak', 'weakness']
+            theme_count = sum(1 for theme in concerning_themes if theme in full_text)
+            
+            if theme_count >= 2:
+                # This suggests aggressive/concerning patterns - don't assign normal personality types
+                return {
+                    'Analytical Thinker': 0,
+                    'Creative Innovator': 0,
+                    'Empathetic Connector': 0,
+                    'Resilient Achiever': 0,
+                    'Balanced Pragmatist': 0,
+                    'concerning_pattern_detected': True,
+                    'negative_sentiment_score': total_negative_confidence
+                }
+        
+        # Use AI to generate personality insights for non-concerning responses
+        try:
+            analysis_prompt = f"Analyze these personality responses for traits: {full_text[:500]}..."
+            ai_insight = get_model_response(analysis_prompt)
+            ai_text = ai_insight.lower()
+            
+            # Analyze AI response for personality indicators
+            if any(word in ai_text for word in ['logical', 'analytical', 'systematic', 'structured']):
+                ai_scores['Analytical Thinker'] += 3
+            if any(word in ai_text for word in ['creative', 'innovative', 'imaginative', 'original']):
+                ai_scores['Creative Innovator'] += 3
+            if any(word in ai_text for word in ['empathetic', 'caring', 'supportive', 'emotional']):
+                ai_scores['Empathetic Connector'] += 3
+            if any(word in ai_text for word in ['resilient', 'determined', 'strong', 'persistent']):
+                ai_scores['Resilient Achiever'] += 3
+            if any(word in ai_text for word in ['balanced', 'practical', 'moderate', 'flexible']):
+                ai_scores['Balanced Pragmatist'] += 3
+        except:
+            # If AI text generation fails, use sentiment-based scoring
+            pass
+            
+        # Adjust based on sentiment patterns
+        if positive_count > negative_count:
+            ai_scores['Empathetic Connector'] += 1
+            ai_scores['Resilient Achiever'] += 1
+        elif negative_count > positive_count:
+            # More negative responses suggest different patterns
+            ai_scores['Analytical Thinker'] += 1  # Might be critical thinking
+        
+        return ai_scores
+        
+    except Exception as e:
+        return None
+
+def analyze_with_keywords(response_text):
+    """Traditional keyword-based analysis"""
+    # More specific keywords for different personality types
+    analytical_keywords = ['analysis', 'analyze', 'logical', 'logic', 'systematic', 'methodical', 'structured', 'organized', 'planning', 'research', 'data', 'facts', 'evidence', 'rational', 'objective']
+    creative_keywords = ['creative', 'creativity', 'artistic', 'imaginative', 'innovative', 'original', 'unique', 'inspiration', 'design', 'experiment', 'brainstorm', 'invent', 'express', 'aesthetic']
+    empathetic_keywords = ['empathy', 'compassion', 'caring', 'supportive', 'understanding', 'listening', 'emotional', 'relationships', 'connect', 'help others', 'teamwork', 'collaborate']
+    resilient_keywords = ['challenge', 'overcome', 'persist', 'persevere', 'determined', 'resilient', 'strong', 'achieve', 'goals', 'success', 'push through', 'never give up', 'endure']
+    balanced_keywords = ['balance', 'moderate', 'flexible', 'adaptable', 'practical', 'reasonable', 'compromise', 'adjust', 'consider both', 'depends on', 'varies']
     
-    # Analyze response patterns
-    response_text = ' '.join(responses).lower()
+    # Score each personality type with weighted scoring
+    analytical_score = 0
+    creative_score = 0
+    empathetic_score = 0
+    resilient_score = 0
+    balanced_score = 0
     
-    # Keywords for different personality types
-    analytical_keywords = ['analysis', 'logic', 'think', 'plan', 'organize', 'detail', 'structure', 'systematic', 'careful', 'research', 'data', 'facts']
-    creative_keywords = ['creative', 'art', 'music', 'imagination', 'innovative', 'original', 'unique', 'express', 'idea', 'inspiration', 'design', 'experiment']
-    empathetic_keywords = ['feel', 'emotion', 'others', 'help', 'care', 'support', 'listen', 'understand', 'empathy', 'relationship', 'friend', 'family']
-    resilient_keywords = ['challenge', 'overcome', 'persist', 'goal', 'achieve', 'strong', 'determined', 'push', 'succeed', 'work hard', 'never give up']
-    balanced_keywords = ['balance', 'both', 'moderate', 'flexible', 'adapt', 'consider', 'practical', 'reasonable', 'compromise', 'depends']
+    # Count keywords with context-aware scoring
+    for word in analytical_keywords:
+        if word in response_text:
+            analytical_score += 2 if len(word) > 6 else 1
     
-    # Score each personality type
-    analytical_score = sum(1 for word in analytical_keywords if word in response_text)
-    creative_score = sum(1 for word in creative_keywords if word in response_text)
-    empathetic_score = sum(1 for word in empathetic_keywords if word in response_text)
-    resilient_score = sum(1 for word in resilient_keywords if word in response_text)
-    balanced_score = sum(1 for word in balanced_keywords if word in response_text)
+    for word in creative_keywords:
+        if word in response_text:
+            creative_score += 2 if len(word) > 6 else 1
     
-    # Check for aggressive/intense responses
-    aggressive_keywords = ['angry', 'hate', 'fight', 'argue', 'aggressive', 'intense', 'furious', 'rage', 'conflict', 'confrontation']
-    aggressive_score = sum(1 for word in aggressive_keywords if word in response_text)
+    for word in empathetic_keywords:
+        if word in response_text:
+            empathetic_score += 2 if len(word) > 6 else 1
     
-    # Determine primary personality type based on scores
-    scores = {
+    for word in resilient_keywords:
+        if word in response_text:
+            resilient_score += 2 if len(word) > 6 else 1
+    
+    for word in balanced_keywords:
+        if word in response_text:
+            balanced_score += 2 if len(word) > 6 else 1
+    
+    return {
         'Analytical Thinker': analytical_score,
         'Creative Innovator': creative_score,
         'Empathetic Connector': empathetic_score,
         'Resilient Achiever': resilient_score,
         'Balanced Pragmatist': balanced_score
     }
+
+def analyze_personality_traits(responses):
+    """Analyze personality traits based on user responses using AI and keyword analysis"""
+    import random
     
-    # If aggressive responses, create special type
-    if aggressive_score > 2:
+    # Analyze response patterns
+    response_text = ' '.join(responses).lower()
+    
+    # Try AI-powered analysis first
+    try:
+        from transformers import pipeline
+        
+        # Use sentiment analysis for personality insights
+        sentiment_analyzer = pipeline("sentiment-analysis")
+        
+        # Analyze overall sentiment and emotional patterns
+        sentiment_results = []
+        for response in responses:
+            if response.strip():
+                sentiment = sentiment_analyzer(response[:512])  # Limit length for processing
+                sentiment_results.append(sentiment[0])
+        
+        # Extract personality insights from AI analysis
+        ai_personality_score = analyze_with_ai(responses, sentiment_results)
+        
+    except Exception as e:
+        # Fallback to keyword analysis if AI fails
+        ai_personality_score = None
+    
+    # Keyword-based analysis (always runs as backup/validation)
+    keyword_scores = analyze_with_keywords(response_text)
+    
+    # Continue with existing personality type determination logic
+    aggressive_keywords = ['angry', 'hate', 'fight', 'argue', 'aggressive', 'intense', 'furious', 'rage', 'conflict', 'confrontation', 'competitive', 'destroy', 'dominate', 'weakness', 'weak', 'pathetic', 'power', 'powerful', 'superior', 'ignore', 'worthless', 'useless', 'inferior', 'crush', 'defeat', 'control', 'manipulate', 'exploit', 'domination', 'fail', 'failure', 'failing']
+    
+    # Enhanced detection for concerning patterns
+    concerning_patterns = ['weakness in others', 'weak around me', 'pathetic weakness', 'focus on my own power', 'showing my power', 'become the best', 'higher than others', 'see other people fail', 'see failure in people', 'makes me feel powerful', 'grow my power', 'my responsibilities and power']
+    concerning_score = sum(3 for pattern in concerning_patterns if pattern in response_text)
+    
+    # Combined aggressive scoring
+    aggressive_score = sum(2 for word in aggressive_keywords if word in response_text) + concerning_score
+    
+    # Combine AI and keyword analysis if AI is available
+    if ai_personality_score and not ai_personality_score.get('concerning_pattern_detected', False):
+        # Weight AI analysis more heavily but use keywords as validation
+        final_scores = {}
+        for key in keyword_scores:
+            ai_weight = ai_personality_score.get(key, 0) * 0.7
+            keyword_weight = keyword_scores[key] * 0.3
+            final_scores[key] = ai_weight + keyword_weight
+    elif ai_personality_score and ai_personality_score.get('concerning_pattern_detected', False):
+        # AI detected concerning patterns - boost aggressive score significantly
+        final_scores = keyword_scores
+        aggressive_score += 15  # Major boost for AI-detected concerning patterns
+    else:
+        # Use keyword analysis only
+        final_scores = keyword_scores
+    
+    # Get individual scores for later use
+    analytical_score = final_scores['Analytical Thinker']
+    creative_score = final_scores['Creative Innovator']
+    empathetic_score = final_scores['Empathetic Connector']
+    resilient_score = final_scores['Resilient Achiever']
+    balanced_score = final_scores['Balanced Pragmatist']
+    
+    # Determine primary personality type based on scores
+    max_score = max(final_scores.values()) if final_scores.values() else 0
+    
+    # If highly aggressive/concerning responses, create special type with appropriate warning
+    if aggressive_score > 8:  # Much lower threshold for concerning patterns
+        primary_type = {
+            'type': 'High-Intensity Individual',
+            'description': 'Your responses suggest very intense, competitive patterns with focus on dominance and power. This may indicate underlying stress, burnout, or interpersonal challenges that could benefit from professional support.'
+        }
+    elif aggressive_score > 3:
         primary_type = {
             'type': 'Intense Competitor',
-            'description': 'You demonstrate high intensity and competitive drive. You approach challenges with strong determination and aren\'t afraid of conflict when pursuing your goals.'
+            'description': 'You demonstrate high intensity and competitive drive. You approach challenges with strong determination and aren\'t afraid of conflict when pursuing your goals. Consider balancing this drive with empathy and collaboration.'
         }
+    elif max_score == 0:
+        # If no keywords matched, assign based on response length and complexity
+        avg_length = sum(len(response.split()) for response in responses) / len(responses) if responses else 0
+        if avg_length > 15:
+            primary_type = {
+                'type': 'Thoughtful Reflector',
+                'description': 'You provide detailed, thoughtful responses and take time to consider multiple aspects of situations. You value depth and nuance in your thinking.'
+            }
+        else:
+            primary_type = {
+                'type': 'Balanced Pragmatist',
+                'description': 'You show a well-rounded approach to life, balancing logic and emotion, work and personal time, and individual goals with social connections.'
+            }
     else:
         # Get the highest scoring type
-        max_type = max(scores, key=scores.get)
+        max_type = max(final_scores, key=final_scores.get)
         
         personality_types = {
             'Analytical Thinker': {
@@ -400,6 +622,15 @@ def analyze_personality_traits(responses):
         "Your responses indicate **resilient mental health** with good self-awareness. You appear to process emotions effectively and maintain perspective during challenges."
     ]
     
+    # Special wellness assessments for concerning patterns
+    concerning_wellness_assessments = [
+        "Your responses show **patterns that may indicate stress, burnout, or underlying emotional challenges**. The focus on dominance, power, and viewing others negatively can be signs of deeper issues. Consider speaking with a mental health professional for support.",
+        
+        "Your responses suggest **high levels of interpersonal tension and competitive stress**. This intensity may be impacting your relationships and overall wellbeing. Professional counseling could help you develop healthier coping strategies.",
+        
+        "Your responses indicate **concerning patterns in how you view others and relationships**. These patterns may be affecting your mental health and social connections. Consider seeking professional support to explore these feelings."
+    ]
+    
     development_recommendations = [
         "• Set aside regular time for self-reflection and journaling\n• Read books or take courses in areas that interest you\n• Practice mindfulness or meditation to enhance self-awareness\n• Seek feedback from trusted friends or mentors",
         
@@ -469,7 +700,7 @@ def analyze_personality_traits(responses):
         'emotional_intelligence': emotional_intelligence_options[empathetic_score % len(emotional_intelligence_options)],
         'growth_areas': growth_areas_options[resilient_score % len(growth_areas_options)],
         'age_insights': age_insight,
-        'wellness_assessment': wellness_assessments[balanced_score % len(wellness_assessments)],
+        'wellness_assessment': concerning_wellness_assessments[0] if aggressive_score > 8 else wellness_assessments[balanced_score % len(wellness_assessments)],
         'development_recommendations': development_recommendations[creative_score % len(development_recommendations)],
         'social_recommendations': social_recommendations[empathetic_score % len(social_recommendations)],
         'career_recommendations': career_recommendations[analytical_score % len(career_recommendations)],
@@ -603,33 +834,38 @@ def main():
     # Dynamic CSS based on selected theme
     st.markdown(f"""
     <style>
+    /* TEMPORARILY DISABLED HEADER HIDING FOR DEBUGGING */
+    /*
+    header[data-testid="stHeader"] {{
+        display: none !important;
+    }}
+    
+    .stApp > header {{
+        display: none !important;
+    }}
+    
+    .stApp > div[data-testid="stHeader"] {{
+        display: none !important;
+    }}
+    
+    .stActionButton {{
+        display: none !important;
+    }}
+    
+    .stApp > div:first-child {{
+        display: none !important;
+    }}
+    
+    .stApp {{
+        margin-top: 0 !important;
+        padding-top: 0 !important;
+    }}
+    */
+    
     /* Main app background - dark theme */
     .stApp {{
         background: {theme['background']} !important;
         color: #e0e0e0 !important;
-    }}
-    
-    /* Top header bar - white background with black text */
-    .stApp > header {{
-        background: white !important;
-        color: #333333 !important;
-    }}
-    
-    /* Streamlit header toolbar */
-    .stApp > div[data-testid="stHeader"] {{
-        background: white !important;
-        color: #333333 !important;
-    }}
-    
-    /* Header elements */
-    header[data-testid="stHeader"] {{
-        background: white !important;
-        color: #333333 !important;
-    }}
-    
-    /* Header text and buttons */
-    header[data-testid="stHeader"] * {{
-        color: #333333 !important;
     }}
     
     /* Main content area dark styling */
@@ -972,8 +1208,7 @@ def main():
         
         # Hugging Face Transformers status
         st.success("� Transformers: GPT-2 active")
-        st.markdown("*Local AI model (no internet required)*")
-        st.markdown("*Powered by Hugging Face Transformers*")
+
         st.divider()
         
         # Progress tracking
